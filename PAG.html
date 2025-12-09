@@ -1,0 +1,1723 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Inventario - Gestión Inteligente</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .loading { opacity: 0.5; pointer-events: none; }
+        .transition-smooth { transition: all 0.3s ease; }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="app" class="flex h-screen">
+        <!-- Sidebar -->
+        <nav class="w-64 bg-gradient-to-b from-blue-600 to-blue-800 text-white shadow-lg">
+            <div class="p-6 border-b border-blue-700">
+                <h1 class="text-2xl font-bold">📦 Inventario</h1>
+                <p class="text-blue-200 text-sm mt-1">Gestión Inteligente</p>
+            </div>
+            <ul class="space-y-2 p-4" id="sidebar-menu">
+                <li><a href="#dashboard" class="nav-link block px-4 py-3 rounded hover:bg-blue-700 transition-smooth active">📊 Dashboard</a></li>
+                <li><a href="#productos" class="nav-link block px-4 py-3 rounded hover:bg-blue-700 transition-smooth">📦 Productos</a></li>
+                <li><a href="#categorias" class="nav-link block px-4 py-3 rounded hover:bg-blue-700 transition-smooth">🏷️ Categorías</a></li>
+                <li><a href="#proveedores" class="nav-link block px-4 py-3 rounded hover:bg-blue-700 transition-smooth">🤝 Proveedores</a></li>
+                <li><a href="#movimientos" class="nav-link block px-4 py-3 rounded hover:bg-blue-700 transition-smooth">↔️ Movimientos</a></li>
+                <li><a href="#reportes" class="nav-link block px-4 py-3 rounded hover:bg-blue-700 transition-smooth">📄 Reportes</a></li>
+                <li><a href="#configuracion" class="nav-link block px-4 py-3 rounded hover:bg-blue-700 transition-smooth">⚙️ Configuración</a></li>
+            </ul>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="flex-1 flex flex-col overflow-hidden">
+            <!-- Top Bar -->
+            <header class="bg-white shadow-sm border-b border-gray-200 px-6 py-4 flex justify-between items-center">
+                <h2 id="page-title" class="text-2xl font-bold text-gray-800">Dashboard</h2>
+                <div class="flex items-center space-x-4">
+                    <div class="text-right">
+                        <p id="current-user" class="text-gray-800 font-medium">Admin</p>
+                        <p class="text-gray-500 text-sm" id="current-time"></p>
+                    </div>
+                    <button id="logout-btn" class="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600">Cerrar Sesión</button>
+                </div>
+            </header>
+
+            <!-- Content Area -->
+            <main class="flex-1 overflow-auto">
+                <div id="content-area" class="p-6">
+                    <!-- Contenido dinámico -->
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Modal Base -->
+    <div id="modal-container"></div>
+
+    <!-- Scripts -->
+    <script src="js/config.js"></script>
+    <script src="js/api/apiClient.js"></script>
+    <script src="js/utils/validators.js"></script>
+    <script src="js/utils/formatters.js"></script>
+    <script src="js/utils/storage.js"></script>
+    <script src="js/components/modalComponent.js"></script>
+    <script src="js/components/tableComponent.js"></script>
+    <script src="js/components/cardComponent.js"></script>
+    <script src="js/components/chartComponent.js"></script>
+    <script src="js/pages/dashboard.js"></script>
+    <script src="js/pages/productos.js"></script>
+    <script src="js/pages/categorias.js"></script>
+    <script src="js/pages/proveedores.js"></script>
+    <script src="js/pages/movimientos.js"></script>
+    <script src="js/pages/reportes.js"></script>
+    <script src="js/pages/configuracion.js"></script>
+    <script src="js/app.js"></script>
+    <script>
+        // Configuración centralizada del sistema
+        const CONFIG = {
+            API_BASE_URL: 'http://localhost:3000/api',
+            APP_NAME: 'Sistema de Inventario',
+            DEFAULT_PAGE_SIZE: 20,
+            ALERT_STOCK_THRESHOLD: 10,
+            DATE_FORMAT: 'dd/MM/yyyy',
+            CURRENCY_FORMAT: 'es-ES',
+            CURRENCY: 'USD',
+            BARCODE_PREFIXES: {
+                PRODUCTO: 'PRD',
+                PROVEEDOR: 'PRV',
+                MOVIMIENTO: 'MOV'
+            },
+            MOVEMENTS_TYPES: {
+                ENTRADA: { label: 'Entrada', color: 'green', icon: '↓' },
+                SALIDA: { label: 'Salida', color: 'red', icon: '↑' },
+                AJUSTE: { label: 'Ajuste', color: 'yellow', icon: '≈' },
+                DEVOLUCION: { label: 'Devolución', color: 'blue', icon: '↔' }
+            },
+            STORAGE_KEYS: {
+                USER: 'inventory_user',
+                THEME: 'inventory_theme',
+                PREFERENCES: 'inventory_preferences'
+            }
+        };
+
+        // Objeto para almacenar estado global
+        const APP_STATE = {
+            currentUser: null,
+            currentPage: 'dashboard',
+            isLoading: false,
+            selectedItems: [],
+            notifications: []
+        };
+
+        // Función para inicializar la aplicación
+        function initializeApp() {
+            console.log('Inicializando aplicación:', CONFIG.APP_NAME);
+            loadUserSession();
+            updateCurrentTime();
+            setInterval(updateCurrentTime, 1000);
+        }
+
+        // Cargar sesión de usuario
+        function loadUserSession() {
+            const user = localStorage.getItem(CONFIG.STORAGE_KEYS.USER);
+            if (user) {
+                APP_STATE.currentUser = JSON.parse(user);
+                document.getElementById('current-user').textContent = APP_STATE.currentUser.name || 'Admin';
+            }
+        }
+
+        // Actualizar hora current
+        function updateCurrentTime() {
+            const now = new Date();
+            const time = now.toLocaleTimeString('es-ES');
+            const date = now.toLocaleDateString('es-ES');
+            document.getElementById('current-time').textContent = `${date} ${time}`;
+        }
+
+        /**
+         * Cliente API centralizado con validación y manejo de errores
+         */
+        class APIClient {
+            constructor(baseURL = CONFIG.API_BASE_URL) {
+                this.baseURL = baseURL;
+                this.timeout = 30000;
+                this.defaultHeaders = {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                };
+            }
+
+            /**
+             * Realizar solicitud HTTP
+             */
+            async request(method, endpoint, options = {}) {
+                const url = `${this.baseURL}${endpoint}`;
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+                try {
+                    const response = await fetch(url, {
+                        method,
+                        headers: {
+                            ...this.defaultHeaders,
+                            ...options.headers
+                        },
+                        body: options.data ? JSON.stringify(options.data) : undefined,
+                        signal: controller.signal,
+                        ...options
+                    });
+
+                    clearTimeout(timeoutId);
+
+                    if (!response.ok) {
+                        throw new APIError(
+                            `HTTP ${response.status}: ${response.statusText}`,
+                            response.status,
+                            await response.text()
+                        );
+                    }
+
+                    return await response.json();
+                } catch (error) {
+                    clearTimeout(timeoutId);
+                    if (error instanceof APIError) throw error;
+                    throw new APIError(error.message, 0, error);
+                }
+            }
+
+            // CRUD básicos
+            async get(endpoint, params = {}) {
+                const queryString = new URLSearchParams(params).toString();
+                const fullEndpoint = queryString ? `${endpoint}?${queryString}` : endpoint;
+                return this.request('GET', fullEndpoint);
+            }
+
+            async post(endpoint, data = {}) {
+                return this.request('POST', endpoint, { data });
+            }
+
+            async put(endpoint, data = {}) {
+                return this.request('PUT', endpoint, { data });
+            }
+
+            async delete(endpoint) {
+                return this.request('DELETE', endpoint);
+            }
+
+            async patch(endpoint, data = {}) {
+                return this.request('PATCH', endpoint, { data });
+            }
+
+            // Métodos específicos para Productos
+            async getProductos(filtros = {}) {
+                return this.get('/productos', filtros);
+            }
+
+            async getProductoById(id) {
+                return this.get(`/productos/${id}`);
+            }
+
+            async createProducto(datos) {
+                return this.post('/productos', datos);
+            }
+
+            async updateProducto(id, datos) {
+                return this.put(`/productos/${id}`, datos);
+            }
+
+            async deleteProducto(id) {
+                return this.delete(`/productos/${id}`);
+            }
+
+            async searchProductos(query) {
+                return this.get('/productos/search', { q: query });
+            }
+
+            // Métodos específicos para Categorías
+            async getCategorias() {
+                return this.get('/categorias');
+            }
+
+            async getCategoriaById(id) {
+                return this.get(`/categorias/${id}`);
+            }
+
+            async createCategoria(datos) {
+                return this.post('/categorias', datos);
+            }
+
+            async updateCategoria(id, datos) {
+                return this.put(`/categorias/${id}`, datos);
+            }
+
+            async deleteCategoria(id) {
+                return this.delete(`/categorias/${id}`);
+            }
+
+            // Métodos específicos para Proveedores
+            async getProveedores() {
+                return this.get('/proveedores');
+            }
+
+            async getProveedorById(id) {
+                return this.get(`/proveedores/${id}`);
+            }
+
+            async createProveedor(datos) {
+                return this.post('/proveedores', datos);
+            }
+
+            async updateProveedor(id, datos) {
+                return this.put(`/proveedores/${id}`, datos);
+            }
+
+            async deleteProveedor(id) {
+                return this.delete(`/proveedores/${id}`);
+            }
+
+            // Métodos para Movimientos
+            async getMovimientos(filtros = {}) {
+                return this.get('/movimientos', filtros);
+            }
+
+            async getMovimientoById(id) {
+                return this.get(`/movimientos/${id}`);
+            }
+
+            async createMovimiento(datos) {
+                return this.post('/movimientos', datos);
+            }
+
+            async generarComprobante(movimientoId) {
+                return this.get(`/movimientos/${movimientoId}/comprobante`);
+            }
+
+            // Métodos para Reportes y Estadísticas
+            async getEstadisticas(periodo = 'mes') {
+                return this.get('/estadisticas', { periodo });
+            }
+
+            async getRotacionProductos() {
+                return this.get('/reportes/rotacion');
+            }
+
+            async getConsumoPorPeriodo(periodo) {
+                return this.get('/reportes/consumo', { periodo });
+            }
+
+            async getGananciasProyectadas() {
+                return this.get('/reportes/ganancias');
+            }
+
+            async getMovimientosDiarios(fecha) {
+                return this.get('/reportes/movimientos-diarios', { fecha });
+            }
+
+            async exportarReporte(tipo = 'completo', formato = 'csv') {
+                const response = await fetch(`${this.baseURL}/reportes/exportar?tipo=${tipo}&formato=${formato}`);
+                return response.blob();
+            }
+
+            // Métodos para Alertas
+            async getAlertas() {
+                return this.get('/alertas');
+            }
+
+            async getProductosBajoStock() {
+                return this.get('/alertas/bajo-stock');
+            }
+
+            // Métodos para Códigos de Barras
+            async generarCodigoBarras(tipo, id) {
+                return this.get(`/codigos-barras/${tipo}/${id}`);
+            }
+
+            async validarCodigoBarras(codigo) {
+                return this.get('/codigos-barras/validar', { codigo });
+            }
+        }
+
+        // Clase personalizada para errores de API
+        class APIError extends Error {
+            constructor(message, status, details) {
+                super(message);
+                this.name = 'APIError';
+                this.status = status;
+                this.details = details;
+            }
+        }
+
+        // Instancia global del cliente API
+        const apiClient = new APIClient();
+
+        if (typeof module !== 'undefined' && module.exports) {
+            module.exports = { APIClient, APIError, apiClient };
+        }
+    </script>
+    <script>
+        /**
+         * Validadores centralizados para el sistema
+         */
+        class Validators {
+            // Validar email
+            static isValidEmail(email) {
+                const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                return regex.test(email);
+            }
+
+            // Validar teléfono
+            static isValidPhone(phone) {
+                const regex = /^[\d\s\-\+\(\)]{7,}$/;
+                return regex.test(phone);
+            }
+
+            // Validar cantidad (número positivo)
+            static isValidQuantity(qty) {
+                return Number.isInteger(Number(qty)) && Number(qty) > 0;
+            }
+
+            // Validar precio
+            static isValidPrice(price) {
+                const num = parseFloat(price);
+                return !isNaN(num) && num >= 0;
+            }
+
+            // Validar código de barras
+            static isValidBarcode(barcode) {
+                return barcode && barcode.trim().length >= 5 && barcode.trim().length <= 50;
+            }
+
+            // Validar SKU (identificador de producto)
+            static isValidSKU(sku) {
+                return sku && /^[A-Z0-9\-_]{3,20}$/.test(sku);
+            }
+
+            // Validar fecha
+            static isValidDate(dateString) {
+                const date = new Date(dateString);
+                return date instanceof Date && !isNaN(date);
+            }
+
+            // Validar nombre (mínimo 2 caracteres)
+            static isValidName(name) {
+                return name && name.trim().length >= 2 && name.trim().length <= 100;
+            }
+
+            // Validar descripción
+            static isValidDescription(desc) {
+                return !desc || (desc.trim().length <= 500);
+            }
+
+            // Validador de formulario completo
+            static validateForm(formData, schema) {
+                const errors = {};
+                
+                for (const [field, rules] of Object.entries(schema)) {
+                    const value = formData[field];
+                    
+                    for (const rule of rules) {
+                        const result = this.applyRule(value, rule);
+                        if (!result.isValid) {
+                            errors[field] = result.message;
+                            break;
+                        }
+                    }
+                }
+
+                return {
+                    isValid: Object.keys(errors).length === 0,
+                    errors
+                };
+            }
+
+            // Aplicar regla de validación
+            static applyRule(value, rule) {
+                const { type, required, message } = rule;
+
+                if (required && !value) {
+                    return { isValid: false, message: message || 'Este campo es requerido' };
+                }
+
+                if (!value) return { isValid: true };
+
+                const validators = {
+                    email: () => this.isValidEmail(value),
+                    phone: () => this.isValidPhone(value),
+                    quantity: () => this.isValidQuantity(value),
+                    price: () => this.isValidPrice(value),
+                    barcode: () => this.isValidBarcode(value),
+                    sku: () => this.isValidSKU(value),
+                    date: () => this.isValidDate(value),
+                    name: () => this.isValidName(value),
+                    description: () => this.isValidDescription(value),
+                    minLength: () => value.toString().length >= rule.value,
+                    maxLength: () => value.toString().length <= rule.value,
+                    min: () => parseFloat(value) >= rule.value,
+                    max: () => parseFloat(value) <= rule.value,
+                    pattern: () => new RegExp(rule.value).test(value)
+                };
+
+                const isValid = validators[type]?.() || true;
+                return {
+                    isValid,
+                    message: message || `Validación fallida para ${type}`
+                };
+            }
+        }
+
+        // Esquemas de validación predefinidos
+        const VALIDATION_SCHEMAS = {
+            PRODUCTO: {
+                nombre: [
+                    { type: 'required', message: 'El nombre es requerido' },
+                    { type: 'name', message: 'El nombre debe tener entre 2 y 100 caracteres' }
+                ],
+                sku: [
+                    { type: 'required', message: 'El SKU es requerido' },
+                    { type: 'sku', message: 'SKU inválido (3-20 caracteres alfanuméricos)' }
+                ],
+                categoria_id: [
+                    { type: 'required', message: 'La categoría es requerida' }
+                ],
+                precio_costo: [
+                    { type: 'required', message: 'El precio de costo es requerido' },
+                    { type: 'price', message: 'El precio debe ser un número válido' },
+                    { type: 'min', value: 0, message: 'El precio no puede ser negativo' }
+                ],
+                precio_venta: [
+                    { type: 'required', message: 'El precio de venta es requerido' },
+                    { type: 'price', message: 'El precio debe ser un número válido' },
+                    { type: 'min', value: 0, message: 'El precio no puede ser negativo' }
+                ],
+                cantidad_inicial: [
+                    { type: 'required', message: 'La cantidad inicial es requerida' },
+                    { type: 'quantity', message: 'La cantidad debe ser un número positivo' }
+                ]
+            },
+            MOVIMIENTO: {
+                producto_id: [
+                    { type: 'required', message: 'El producto es requerido' }
+                ],
+                tipo: [
+                    { type: 'required', message: 'El tipo de movimiento es requerido' }
+                ],
+                cantidad: [
+                    { type: 'required', message: 'La cantidad es requerida' },
+                    { type: 'quantity', message: 'La cantidad debe ser un número positivo' }
+                ],
+                fecha: [
+                    { type: 'required', message: 'La fecha es requerida' },
+                    { type: 'date', message: 'La fecha debe ser válida' }
+                ]
+            }
+        };
+
+        if (typeof module !== 'undefined' && module.exports) {
+            module.exports = { Validators, VALIDATION_SCHEMAS };
+        }
+    </script>
+    <script>
+        /**
+         * Formateadores centralizados para datos
+         */
+        class Formatters {
+            // Formatear moneda
+            static formatCurrency(value, currency = CONFIG.CURRENCY) {
+                return new Intl.NumberFormat(CONFIG.CURRENCY_FORMAT, {
+                    style: 'currency',
+                    currency: currency,
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                }).format(parseFloat(value) || 0);
+            }
+
+            // Formatear número
+            static formatNumber(value, decimals = 2) {
+                return parseFloat(value || 0).toFixed(decimals);
+            }
+
+            // Formatear porcentaje
+            static formatPercentage(value, decimals = 2) {
+                return `${(parseFloat(value) || 0).toFixed(decimals)}%`;
+            }
+
+            // Formatear fecha
+            static formatDate(dateString, format = 'dd/MM/yyyy') {
+                const date = new Date(dateString);
+                if (isNaN(date)) return dateString;
+
+                const day = String(date.getDate()).padStart(2, '0');
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const year = date.getFullYear();
+                const hours = String(date.getHours()).padStart(2, '0');
+                const minutes = String(date.getMinutes()).padStart(2, '0');
+
+                return format
+                    .replace('dd', day)
+                    .replace('MM', month)
+                    .replace('yyyy', year)
+                    .replace('HH', hours)
+                    .replace('mm', minutes);
+            }
+
+            // Formatear fecha y hora
+            static formatDateTime(dateString) {
+                return this.formatDate(dateString, 'dd/MM/yyyy HH:mm');
+            }
+
+            // Formatear tiempo transcurrido
+            static formatTimeAgo(dateString) {
+                const now = new Date();
+                const date = new Date(dateString);
+                const seconds = Math.floor((now - date) / 1000);
+
+                const intervals = {
+                    año: 31536000,
+                    mes: 2592000,
+                    semana: 604800,
+                    día: 86400,
+                    hora: 3600,
+                    minuto: 60
+                };
+
+                for (const [unit, secondsInUnit] of Object.entries(intervals)) {
+                    const interval = Math.floor(seconds / secondsInUnit);
+                    if (interval >= 1) {
+                        return `hace ${interval} ${unit}${interval > 1 ? 's' : ''}`;
+                    }
+                }
+
+                return 'hace unos segundos';
+            }
+
+            // Normalizar dato (trim, lowercase, etc.)
+            static normalizeString(str) {
+                return str?.trim().toLowerCase() || '';
+            }
+
+            // Normalizar cantidad
+            static normalizeQuantity(qty) {
+                const num = parseInt(qty);
+                return isNaN(num) ? 0 : Math.max(0, num);
+            }
+
+            // Normalizar precio
+            static normalizePrice(price) {
+                const num = parseFloat(price);
+                return isNaN(num) ? 0 : Math.max(0, num);
+            }
+
+            // Normalizar fecha a formato ISO
+            static normalizeDate(dateString) {
+                const date = new Date(dateString);
+                return date instanceof Date && !isNaN(date) ? date.toISOString() : null;
+            }
+
+            // Truncar texto
+            static truncateText(text, maxLength = 50) {
+                if (text.length <= maxLength) return text;
+                return text.substring(0, maxLength - 3) + '...';
+            }
+
+            // Formatear estado
+            static formatStatus(status) {
+                const statuses = {
+                    'activo': { label: 'Activo', color: 'green' },
+                    'inactivo': { label: 'Inactivo', color: 'red' },
+                    'pendiente': { label: 'Pendiente', color: 'yellow' },
+                    'completado': { label: 'Completado', color: 'green' },
+                    'cancelado': { label: 'Cancelado', color: 'gray' }
+                };
+                return statuses[status?.toLowerCase()] || { label: status, color: 'gray' };
+            }
+
+            // Slugify - convertir texto a slug
+            static slugify(text) {
+                return text
+                    .toLowerCase()
+                    .trim()
+                    .replace(/[^\w\s-]/g, '')
+                    .replace(/[\s_-]+/g, '-')
+                    .replace(/^-+|-+$/g, '');
+            }
+
+            // Capitalizar primera letra
+            static capitalize(str) {
+                return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
+            }
+
+            // Generar código único
+            static generateCode(prefix = '', length = 8) {
+                const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+                let code = prefix;
+                for (let i = 0; i < length; i++) {
+                    code += chars.charAt(Math.floor(Math.random() * chars.length));
+                }
+                return code;
+            }
+        }
+
+        if (typeof module !== 'undefined' && module.exports) {
+            module.exports = { Formatters };
+        }
+    </script>
+    <script>
+        /**
+         * Gestión centralizada de localStorage con validación
+         */
+        class StorageManager {
+            constructor(prefix = 'inventory_') {
+                this.prefix = prefix;
+            }
+
+            // Generar clave con prefijo
+            getKey(key) {
+                return `${this.prefix}${key}`;
+            }
+
+            // Guardar datos
+            set(key, value) {
+                try {
+                    const data = typeof value === 'string' ? value : JSON.stringify(value);
+                    localStorage.setItem(this.getKey(key), data);
+                    return true;
+                } catch (error) {
+                    console.error('Error al guardar en storage:', error);
+                    return false;
+                }
+            }
+
+            // Obtener datos
+            get(key, defaultValue = null) {
+                try {
+                    const data = localStorage.getItem(this.getKey(key));
+                    if (!data) return defaultValue;
+                    
+                    try {
+                        return JSON.parse(data);
+                    } catch {
+                        return data;
+                    }
+                } catch (error) {
+                    console.error('Error al leer del storage:', error);
+                    return defaultValue;
+                }
+            }
+
+            // Eliminar datos
+            remove(key) {
+                try {
+                    localStorage.removeItem(this.getKey(key));
+                    return true;
+                } catch (error) {
+                    console.error('Error al eliminar del storage:', error);
+                    return false;
+                }
+            }
+
+            // Limpiar todo
+            clear() {
+                try {
+                    const keys = Object.keys(localStorage);
+                    keys.forEach(key => {
+                        if (key.startsWith(this.prefix)) {
+                            localStorage.removeItem(key);
+                        }
+                    });
+                    return true;
+                } catch (error) {
+                    console.error('Error al limpiar storage:', error);
+                    return false;
+                }
+            }
+
+            // Verificar si existe
+            has(key) {
+                return localStorage.getItem(this.getKey(key)) !== null;
+            }
+
+            // Obtener todas las claves
+            getAllKeys() {
+                return Object.keys(localStorage)
+                    .filter(key => key.startsWith(this.prefix))
+                    .map(key => key.replace(this.prefix, ''));
+            }
+
+            // Obtener tamaño de storage usado
+            getSize() {
+                let size = 0;
+                for (let key in localStorage) {
+                    if (key.startsWith(this.prefix)) {
+                        size += localStorage[key].length + key.length;
+                    }
+                }
+                return size;
+            }
+        }
+
+        // Instancia global
+        const storage = new StorageManager();
+
+        // Cache para datos frecuentemente accedidos
+        class CacheManager {
+            constructor(ttl = 3600000) { // 1 hora por defecto
+                this.cache = new Map();
+                this.ttl = ttl;
+            }
+
+            set(key, value) {
+                this.cache.set(key, {
+                    value,
+                    timestamp: Date.now()
+                });
+            }
+
+            get(key) {
+                const item = this.cache.get(key);
+                if (!item) return null;
+
+                if (Date.now() - item.timestamp > this.ttl) {
+                    this.cache.delete(key);
+                    return null;
+                }
+
+                return item.value;
+            }
+
+            clear() {
+                this.cache.clear();
+            }
+
+            remove(key) {
+                this.cache.delete(key);
+            }
+        }
+
+        const cache = new CacheManager();
+
+        if (typeof module !== 'undefined' && module.exports) {
+            module.exports = { StorageManager, CacheManager, storage, cache };
+        }
+    </script>
+    <script>
+        /**
+         * Componente Modal reutilizable
+         */
+        class Modal {
+            constructor(id, options = {}) {
+                this.id = id;
+                this.title = options.title || 'Modal';
+                this.size = options.size || 'md'; // sm, md, lg, xl
+                this.closeable = options.closeable !== false;
+                this.onConfirm = options.onConfirm || null;
+                this.onClose = options.onClose || null;
+                this.element = null;
+            }
+
+            // Crear elementos del modal
+            create(content, actions = []) {
+                const container = document.getElementById('modal-container');
+                
+                const sizeClasses = {
+                    'sm': 'max-w-sm',
+                    'md': 'max-w-md',
+                    'lg': 'max-w-lg',
+                    'xl': 'max-w-2xl'
+                };
+
+                const modal = document.createElement('div');
+                modal.id = this.id;
+                modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 transition-opacity';
+                modal.innerHTML = `
+                    <div class="bg-white rounded-lg shadow-lg ${sizeClasses[this.size]} w-full mx-4">
+                        <div class="flex justify-between items-center p-6 border-b border-gray-200">
+                            <h3 class="text-lg font-bold text-gray-800">${this.title}</h3>
+                            ${this.closeable ? `<button class="text-gray-500 hover:text-gray-700 close-btn">✕</button>` : ''}
+                        </div>
+                        <div class="p-6 max-h-96 overflow-y-auto">
+                            ${content}
+                        </div>
+                        <div class="flex justify-end gap-3 p-6 border-t border-gray-200">
+                            ${actions.map(action => `
+                                <button class="action-btn px-4 py-2 rounded font-medium ${action.class}" data-action="${action.id}">
+                                    ${action.label}
+                                </button>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+
+                container.appendChild(modal);
+                this.element = modal;
+
+                // Event listeners
+                if (this.closeable) {
+                    modal.querySelector('.close-btn')?.addEventListener('click', () => this.close());
+                }
+
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) this.close();
+                });
+
+                modal.querySelectorAll('.action-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const actionId = e.target.dataset.action;
+                        const action = actions.find(a => a.id === actionId);
+                        if (action?.onClick) {
+                            action.onClick();
+                        }
+                    });
+                });
+
+                return this;
+            }
+
+            // Mostrar modal
+            show() {
+                if (this.element) {
+                    this.element.style.display = 'flex';
+                    this.element.classList.add('fadeIn');
+                }
+                return this;
+            }
+
+            // Cerrar modal
+            close() {
+                if (this.element) {
+                    this.element.classList.remove('fadeIn');
+                    setTimeout(() => {
+                        if (this.element) {
+                            this.element.remove();
+                            this.onClose?.();
+                        }
+                    }, 300);
+                }
+                return this;
+            }
+
+            // Actualizar contenido
+            updateContent(content) {
+                const contentDiv = this.element?.querySelector('.p-6');
+                if (contentDiv) {
+                    contentDiv.innerHTML = content;
+                }
+                return this;
+            }
+
+            // Actualizar título
+            updateTitle(title) {
+                this.title = title;
+                const titleElement = this.element?.querySelector('h3');
+                if (titleElement) {
+                    titleElement.textContent = title;
+                }
+                return this;
+            }
+        }
+
+        // Helper para crear modal de confirmación
+        function showConfirmModal(title, message, onConfirm, onCancel) {
+            const modal = new Modal(`confirm-${Date.now()}`, { title, size: 'sm' });
+            const content = `<p class="text-gray-700">${message}</p>`;
+            const actions = [
+                {
+                    id: 'cancel',
+                    label: 'Cancelar',
+                    class: 'bg-gray-300 text-gray-800 hover:bg-gray-400',
+                    onClick: () => {
+                        modal.close();
+                        onCancel?.();
+                    }
+                },
+                {
+                    id: 'confirm',
+                    label: 'Confirmar',
+                    class: 'bg-blue-600 text-white hover:bg-blue-700',
+                    onClick: () => {
+                        modal.close();
+                        onConfirm?.();
+                    }
+                }
+            ];
+
+            modal.create(content, actions).show();
+        }
+
+        // Helper para mostrar alertas
+        function showAlert(type = 'info', message = '', duration = 5000) {
+            const alertColors = {
+                'success': 'bg-green-100 text-green-800 border-green-300',
+                'error': 'bg-red-100 text-red-800 border-red-300',
+                'warning': 'bg-yellow-100 text-yellow-800 border-yellow-300',
+                'info': 'bg-blue-100 text-blue-800 border-blue-300'
+            };
+
+            const alert = document.createElement('div');
+            alert.className = `fixed top-4 right-4 p-4 rounded border ${alertColors[type] || alertColors.info} transition-opacity z-50`;
+            alert.textContent = message;
+            document.body.appendChild(alert);
+
+            setTimeout(() => {
+                alert.classList.add('fade-out');
+                setTimeout(() => alert.remove(), 300);
+            }, duration);
+        }
+
+        if (typeof module !== 'undefined' && module.exports) {
+            module.exports = { Modal, showConfirmModal, showAlert };
+        }
+    </script>
+    <script>
+        /**
+         * Componente Tabla reutilizable
+         */
+        class Table {
+            constructor(id, options = {}) {
+                this.id = id;
+                this.columns = options.columns || [];
+                this.data = options.data || [];
+                this.selectable = options.selectable !== false;
+                this.sortable = options.sortable !== false;
+                this.pageable = options.pageable !== false;
+                this.pageSize = options.pageSize || CONFIG.DEFAULT_PAGE_SIZE;
+                this.currentPage = 0;
+                this.onRowClick = options.onRowClick || null;
+                this.onSelectChange = options.onSelectChange || null;
+                this.actions = options.actions || [];
+                this.element = null;
+                this.selectedRows = new Set();
+            }
+
+            // Crear tabla
+            create() {
+                this.element = document.createElement('div');
+                this.element.id = this.id;
+                this.element.className = 'bg-white rounded-lg shadow-md overflow-hidden';
+                
+                this.render();
+                return this;
+            }
+
+            // Renderizar tabla
+            render() {
+                if (!this.element) return;
+
+                const tableHTML = `
+                    <table class="w-full border-collapse">
+                        <thead class="bg-gray-100 border-b">
+                            <tr>
+                                ${this.selectable ? '<th class="p-4"><input type="checkbox" class="select-all-checkbox"></th>' : ''}
+                                ${this.columns.map(col => `
+                                    <th class="p-4 text-left text-sm font-semibold text-gray-700 cursor-pointer sortable-header" data-field="${col.field}">
+                                        ${col.label}
+                                        <span class="sort-indicator">↕</span>
+                                    </th>
+                                `).join('')}
+                                ${this.actions.length > 0 ? '<th class="p-4 text-center text-sm font-semibold text-gray-700">Acciones</th>' : ''}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${this.renderRows()}
+                        </tbody>
+                    </table>
+                    ${this.pageable ? this.renderPagination() : ''}
+                `;
+
+                this.element.innerHTML = tableHTML;
+
+                // Event listeners
+                this.setupEventListeners();
+            }
+
+            // Renderizar filas
+            renderRows() {
+                const paginatedData = this.pageable 
+                    ? this.data.slice(this.currentPage * this.pageSize, (this.currentPage + 1) * this.pageSize)
+                    : this.data;
+
+                return paginatedData.map((row, index) => `
+                    <tr class="border-b hover:bg-gray-50 transition-colors" data-row-id="${row.id}">
+                        ${this.selectable ? `
+                            <td class="p-4">
+                                <input type="checkbox" class="row-checkbox" data-id="${row.id}">
+                            </td>
+                        ` : ''}
+                        ${this.columns.map(col => `
+                            <td class="p-4 text-sm text-gray-800">
+                                ${col.format ? col.format(row[col.field], row) : row[col.field]}
+                            </td>
+                        `).join('')}
+                        ${this.actions.length > 0 ? `
+                            <td class="p-4 text-center">
+                                <div class="flex justify-center gap-2">
+                                    ${this.actions.map(action => `
+                                        <button class="action-btn text-sm px-2 py-1 rounded text-white ${action.class}" 
+                                                data-action="${action.id}" title="${action.label}">
+                                            ${action.icon || action.label}
+                                        </button>
+                                    `).join('')}
+                                </div>
+                            </td>
+                        ` : ''}
+                    </tr>
+                `).join('');
+            }
+
+            // Renderizar paginación
+            renderPagination() {
+                const totalPages = Math.ceil(this.data.length / this.pageSize);
+                if (totalPages <= 1) return '';
+
+                return `
+                    <div class="flex justify-center gap-2 p-4 border-t bg-gray-50">
+                        <button class="prev-page px-3 py-1 rounded border border-gray-300 hover:bg-gray-200" 
+                                ${this.currentPage === 0 ? 'disabled' : ''}>← Anterior</button>
+                        <div class="flex gap-1">
+                            ${Array.from({ length: totalPages }).map((_, i) => `
+                                <button class="page-btn px-3 py-1 rounded border ${i === this.currentPage ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 hover:bg-gray-200'}" 
+                                        data-page="${i}">${i + 1}</button>
+                            `).join('')}
+                        </div>
+                        <button class="next-page px-3 py-1 rounded border border-gray-300 hover:bg-gray-200" 
+                                ${this.currentPage === totalPages - 1 ? 'disabled' : ''}>Siguiente →</button>
+                    </div>
+                `;
+            }
+
+            // Configurar event listeners
+            setupEventListeners() {
+                // Seleccionar todas las filas
+                this.element.querySelector('.select-all-checkbox')?.addEventListener('change', (e) => {
+                    const checkboxes = this.element.querySelectorAll('.row-checkbox');
+                    checkboxes.forEach(checkbox => {
+                        checkbox.checked = e.target.checked;
+                        if (e.target.checked) {
+                            this.selectedRows.add(checkbox.dataset.id);
+                        } else {
+                            this.selectedRows.delete(checkbox.dataset.id);
+                        }
+                    });
+                    this.onSelectChange?.(Array.from(this.selectedRows));
+                });
+
+                // Seleccionar filas individuales
+                this.element.querySelectorAll('.row-checkbox').forEach(checkbox => {
+                    checkbox.addEventListener('change', (e) => {
+                        if (e.target.checked) {
+                            this.selectedRows.add(e.target.dataset.id);
+                        } else {
+                            this.selectedRows.delete(e.target.dataset.id);
+                        }
+                        this.onSelectChange?.(Array.from(this.selectedRows));
+                    });
+                });
+
+                // Ordenar columnas
+                this.element.querySelectorAll('.sortable-header').forEach(header => {
+                    header.addEventListener('click', () => {
+                        const field = header.dataset.field;
+                        this.sortByField(field);
+                    });
+                });
+
+                // Acciones de fila
+                this.element.querySelectorAll('.action-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const rowId = e.target.closest('tr').dataset.rowId;
+                        const actionId = e.target.dataset.action;
+                        const action = this.actions.find(a => a.id === actionId);
+                        const rowData = this.data.find(r => r.id.toString() === rowId);
+                        action?.onClick?.(rowData);
+                    });
+                });
+
+                // Click en fila
+                this.element.querySelectorAll('tbody tr').forEach(row => {
+                    row.addEventListener('click', (e) => {
+                        if (!e.target.closest('.action-btn') && !e.target.closest('input')) {
+                            const rowId = row.dataset.rowId;
+                            const rowData = this.data.find(r => r.id.toString() === rowId);
+                            this.onRowClick?.(rowData);
+                        }
+                    });
+                });
+
+                // Paginación
+                this.element.querySelector('.prev-page')?.addEventListener('click', () => {
+                    if (this.currentPage > 0) {
+                        this.currentPage--;
+                        this.render();
+                    }
+                });
+
+                this.element.querySelector('.next-page')?.addEventListener('click', () => {
+                    const totalPages = Math.ceil(this.data.length / this.pageSize);
+                    if (this.currentPage < totalPages - 1) {
+                        this.currentPage++;
+                        this.render();
+                    }
+                });
+
+                this.element.querySelectorAll('.page-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        this.currentPage = parseInt(btn.dataset.page);
+                        this.render();
+                    });
+                });
+            }
+
+            // Ordenar por campo
+            sortByField(field) {
+                const isAscending = this.data.every((a, i, arr) => 
+                    i === 0 || arr[i - 1][field] <= a[field]
+                );
+
+                this.data.sort((a, b) => {
+                    const aVal = a[field];
+                    const bVal = b[field];
+                    
+                    if (typeof aVal === 'string') {
+                        return isAscending ? bVal.localeCompare(aVal) : aVal.localeCompare(bVal);
+                    }
+                    
+                    return isAscending ? bVal - aVal : aVal - bVal;
+                });
+
+                this.currentPage = 0;
+                this.render();
+            }
+
+            // Actualizar datos
+            updateData(data) {
+                this.data = data;
+                this.currentPage = 0;
+                this.selectedRows.clear();
+                this.render();
+                return this;
+            }
+
+            // Agregar fila
+            addRow(row) {
+                this.data.unshift(row);
+                this.render();
+                return this;
+            }
+
+            // Eliminar fila
+            removeRow(id) {
+                this.data = this.data.filter(r => r.id !== id);
+                this.render();
+                return this;
+            }
+
+            // Obtener filas seleccionadas
+            getSelectedRows() {
+                return Array.from(this.selectedRows).map(id => 
+                    this.data.find(r => r.id.toString() === id)
+                );
+            }
+
+            // Agregar a contenedor
+            appendTo(selector) {
+                const container = document.querySelector(selector);
+                if (container) {
+                    container.appendChild(this.element);
+                }
+                return this;
+            }
+        }
+
+        if (typeof module !== 'undefined' && module.exports) {
+            module.exports = { Table };
+        }
+    </script>
+    <script>
+        /**
+         * Componente Card reutilizable
+         */
+        class Card {
+            constructor(options = {}) {
+                this.title = options.title || '';
+                this.content = options.content || '';
+                this.icon = options.icon || '';
+                this.value = options.value || '';
+                this.subtitle = options.subtitle || '';
+                this.actions = options.actions || [];
+                this.className = options.className || '';
+                this.footer = options.footer || '';
+            }
+
+            render() {
+                return `
+                    <div class="bg-white rounded-lg shadow-md p-6 ${this.className}">
+                        ${this.title || this.icon ? `
+                            <div class="flex justify-between items-start mb-4">
+                                <div>
+                                    ${this.icon ? `<span class="text-3xl">${this.icon}</span>` : ''}
+                                    ${this.title ? `<h3 class="text-lg font-semibold text-gray-800 mt-2">${this.title}</h3>` : ''}
+                                    ${this.subtitle ? `<p class="text-sm text-gray-500 mt-1">${this.subtitle}</p>` : ''}
+                                </div>
+                                ${this.value ? `<div class="text-2xl font-bold text-blue-600">${this.value}</div>` : ''}
+                            </div>
+                        ` : ''}
+                        
+                        ${this.content ? `<div class="text-gray-700 mb-4">${this.content}</div>` : ''}
+                        
+                        ${this.actions.length > 0 ? `
+                            <div class="flex gap-2 mt-4">
+                                ${this.actions.map(action => `
+                                    <button class="flex-1 px-3 py-2 rounded text-sm font-medium ${action.class}" 
+                                            data-action="${action.id}">
+                                        ${action.label}
+                                    </button>
+                                `).join('')}
+                            </div>
+                        ` : ''}
+                        
+                        ${this.footer ? `<div class="text-xs text-gray-500 mt-4 pt-4 border-t">${this.footer}</div>` : ''}
+                    </div>
+                `;
+            }
+        }
+
+        // Componente para dashboard de estadísticas
+        class StatCard extends Card {
+            constructor(title, value, change = null, icon = '📊') {
+                const changeHTML = change ? `
+                    <div class="text-sm mt-2 ${change > 0 ? 'text-green-600' : 'text-red-600'}">
+                        ${change > 0 ? '↑' : '↓'} ${Math.abs(change)}%
+                    </div>
+                ` : '';
+
+                super({
+                    title,
+                    value: value,
+                    content: changeHTML,
+                    icon,
+                    className: 'hover:shadow-lg transition-shadow'
+                });
+            }
+        }
+
+        // Componente para tarjeta de producto
+        class ProductCard {
+            constructor(producto, actions = []) {
+                this.producto = producto;
+                this.actions = actions;
+            }
+
+            render() {
+                const { id, nombre, sku, cantidad, precio_venta, imagen, categoria } = this.producto;
+                const enStock = cantidad > 0;
+                const alerta = cantidad < CONFIG.ALERT_STOCK_THRESHOLD;
+
+                return `
+                    <div class="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow">
+                        <div class="relative bg-gray-100 h-32 flex items-center justify-center ${!enStock ? 'opacity-50' : ''}">
+                            ${imagen ? `<img src="${imagen}" alt="${nombre}" class="w-full h-full object-cover">` : '<span class="text-4xl">📦</span>'}
+                            ${alerta && enStock ? '<span class="absolute top-2 right-2 bg-yellow-500 text-white px-2 py-1 rounded-full text-xs font-semibold">⚠️ Bajo Stock</span>' : ''}
+                            ${!enStock ? '<span class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50"><span class="text-white font-bold">AGOTADO</span></span>' : ''}
+                        </div>
+                        <div class="p-4">
+                            <h4 class="font-semibold text-gray-800 text-sm mb-1">${nombre}</h4>
+                            <p class="text-gray-500 text-xs mb-2">SKU: ${sku}</p>
+                            <div class="flex justify-between items-center mb-3">
+                                <span class="text-lg font-bold text-blue-600">${Formatters.formatCurrency(precio_venta)}</span>
+                                <span class="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs font-semibold">${cantidad} unidades</span>
+                            </div>
+                            <div class="flex gap-2">
+                                ${this.actions.map(action => `
+                                    <button class="flex-1 px-3 py-2 rounded text-sm font-medium ${action.class}" 
+                                            data-product-id="${id}" data-action="${action.id}">
+                                        ${action.label}
+                                    </button>
+                                `).join('')}
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        /**
+         * Componente Chart (Gráficos) reutilizable
+         */
+        class Chart {
+            constructor(id, type, options = {}) {
+                this.id = id;
+                this.type = type;
+                this.options = options;
+                this.chart = null;
+                this.context = null;
+            }
+
+            // Crear gráfico
+            create(data, chartOptions = {}) {
+                const container = document.getElementById(this.id);
+                if (!container) return this;
+
+                const canvas = document.createElement('canvas');
+                canvas.id = `${this.id}-canvas`;
+                container.innerHTML = '';
+                container.appendChild(canvas);
+
+                const defaultOptions = {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        }
+                    }
+                };
+
+                this.context = canvas.getContext('2d');
+                this.chart = new window.Chart(this.context, {
+                    type: this.type,
+                    data,
+                    options: { ...defaultOptions, ...chartOptions }
+                });
+
+                return this;
+            }
+
+            // Actualizar datos
+            update(data) {
+                if (this.chart) {
+                    this.chart.data = data;
+                    this.chart.update();
+                }
+                return this;
+            }
+
+            // Destruir gráfico
+            destroy() {
+                if (this.chart) {
+                    this.chart.destroy();
+                    this.chart = null;
+                }
+                return this;
+            }
+
+            // Exportar como imagen
+            downloadAsImage(filename = 'chart.png') {
+                if (this.chart) {
+                    const url = this.chart.canvas.toDataURL('image/png');
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = filename;
+                    link.click();
+                }
+                return this;
+            }
+        }
+
+        // Factory para crear gráficos comunes
+        class ChartFactory {
+            static createLineChart(id, labels, datasets) {
+                const data = {
+                    labels,
+                    datasets: datasets.map(dataset => ({
+                        ...dataset,
+                        borderColor: dataset.borderColor || `rgb(${Math.random() * 255}, ${Math.random() * 255}, ${Math.random() * 255})`,
+                        backgroundColor: `rgba(${Math.random() * 255}, ${Math.random() * 255}, ${Math.random() * 255}, 0.1)`,
+                        tension: 0.4,
+                        borderWidth: 2,
+                        fill: true
+                    }))
+                };
+
+                const chart = new Chart(id, 'line');
+                chart.create(data, {
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                });
+                return chart;
+            }
+
+            static createBarChart(id, labels, datasets) {
+                const data = {
+                    labels,
+                    datasets: datasets.map((dataset, idx) => ({
+                        ...dataset,
+                        backgroundColor: dataset.backgroundColor || `rgb(${54 + idx * 20}, ${162 + idx * 20}, ${235 + idx * 20})`,
+                        borderColor: 'rgba(0, 0, 0, 0.1)',
+                        borderWidth: 1
+                    }))
+                };
+
+                const chart = new Chart(id, 'bar');
+                chart.create(data, {
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                });
+                return chart;
+            }
+
+            static createPieChart(id, labels, data) {
+                const colors = [
+                    'rgb(255, 99, 132)',
+                    'rgb(54, 162, 235)',
+                    'rgb(255, 206, 86)',
+                    'rgb(75, 192, 192)',
+                    'rgb(153, 102, 255)',
+                    'rgb(255, 159, 64)'
+                ];
+
+                const chartData = {
+                    labels,
+                    datasets: [{
+                        data,
+                        backgroundColor: colors.slice(0, labels.length),
+                        borderColor: colors.slice(0, labels.length),
+                        borderWidth: 2
+                    }]
+                };
+
+                const chart = new Chart(id, 'pie');
+                chart.create(chartData);
+                return chart;
+            }
+
+            static createDoughnutChart(id, labels, data) {
+                const colors = [
+                    'rgba(255, 99, 132, 0.8)',
+                    'rgba(54, 162, 235, 0.8)',
+                    'rgba(255, 206, 86, 0.8)',
+                    'rgba(75, 192, 192, 0.8)',
+                    'rgba(153, 102, 255, 0.8)',
+                    'rgba(255, 159, 64, 0.8)'
+                ];
+
+                const chartData = {
+                    labels,
+                    datasets: [{
+                        data,
+                        backgroundColor: colors.slice(0, labels.length),
+                        borderColor: '#fff',
+                        borderWidth: 2
+                    }]
+                };
+
+                const chart = new Chart(id, 'doughnut');
+                chart.create(chartData);
+                return chart;
+            }
+
+            static createAreaChart(id, labels, datasets) {
+                return ChartFactory.createLineChart(id, labels, datasets);
+            }
+        }
+
+        if (typeof module !== 'undefined' && module.exports) {
+            module.exports = { Chart, ChartFactory };
+        }
+    </script>
+    <script>
+        /**
+         * Página Dashboard - Estadísticas e información general
+         */
+        class DashboardPage {
+            constructor() {
+                this.charts = [];
+                this.statsData = null;
+            }
+
+            async init() {
+                APP_STATE.currentPage = 'dashboard';
+                document.getElementById('page-title').textContent = '📊 Dashboard';
+                await this.loadDashboard();
+                this.setupEventListeners();
+            }
+
+            async loadDashboard() {
+                try {
+                    APP_STATE.isLoading = true;
+                    
+                    // Cargar datos
+                    const [stats, rotacion, consumo, ganancias, movimientosDiarios, productosBajoStock] = await Promise.all([
+                        apiClient.getEstadisticas('mes'),
+                        apiClient.getRotacionProductos(),
+                        apiClient.getConsumoPorPeriodo('mes'),
+                        apiClient.getGananciasProyectadas(),
+                        apiClient.getMovimientosDiarios(new Date().toISOString().split('T')[0]),
+                        apiClient.getProductosBajoStock()
+                    ]);
+
+                    this.statsData = { stats, rotacion, consumo, ganancias, movimientosDiarios, productosBajoStock };
+                    this.renderDashboard(stats, rotacion, consumo, ganancias, movimientosDiarios, productosBajoStock);
+                } catch (error) {
+                    console.error('Error cargando dashboard:', error);
+                    showAlert('error', 'Error al cargar dashboard');
+                } finally {
+                    APP_STATE.isLoading = false;
+                }
+            }
+
+            renderDashboard(stats, rotacion, consumo, ganancias, movimientosDiarios, productosBajoStock) {
+                const content = `
+                    <!-- Tarjetas de Estadísticas Principales -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+                        <div class="bg-white rounded-lg shadow-md p-6">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <p class="text-gray-500 text-sm font-medium">Total Productos</p>
+                                    <p class="text-3xl font-bold text-blue-600 mt-2">${stats.total_productos}</p>
+                                </div>
+                                <span class="text-4xl">📦</span>
+                            </div>
+                            <p class="text-xs text-gray-400 mt-4">Activos en el sistema</p>
+                        </div>
+
+                        <div class="bg-white rounded-lg shadow-md p-6">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <p class="text-gray-500 text-sm font-medium">Valor Inventario</p>
+                                    <p class="text-3xl font-bold text-green-600 mt-2">${Formatters.formatCurrency(stats.valor_total_inventario)}</p>
+                                </div>
+                                <span class="text-4xl">💰</span>
+                            </div>
+                            <p class="text-xs text-gray-400 mt-4">Valor de costo total</p>
+                        </div>
+
+                        <div class="bg-white rounded-lg shadow-md p-6">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <p class="text-gray-500 text-sm font-medium">Bajo Stock</p>
+                                    <p class="text-3xl font-bold text-yellow-600 mt-2">${productosBajoStock.length}</p>
+                                </div>
+                                <span class="text-4xl">⚠️</span>
+                            </div>
+                            <p class="text-xs text-gray-400 mt-4">Requieren reorden</p>
+                        </div>
+
+                        <div class="bg-white rounded-lg shadow-md p-6">
+                            <div class="flex justify-between items-start">
+                                <div>
+                                    <p class="text-gray-500 text-sm font-medium">Ganancias Proyectadas</p>
+                                    <p class="text-3xl font-bold text-purple-600 mt-2">${Formatters.formatCurrency(ganancias.total)}</p>
+                                </div>
+                                <span class="text-4xl">📈</span>
+                            </div>
+                            <p class="text-xs text-gray-400 mt-4">Para el mes actual</p>
+                        </div>
+                    </div>
+
+                    <!-- Gráficos Estadísticos -->
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                        <div class="bg-white rounded-lg shadow-md p-6">
+                            <h4 class="text-gray-800 font-semibold mb-4">Rotación de Productos</h4>
+                            <div id="chart-rotacion" class="h-64"></div>
+                        </div>
+
+                        <div class="bg-white rounded-lg shadow-md p-6">
+                            <h4 class="text-gray-800 font-semibold mb-4">Consumo por Período</h4>
+                            <div id="chart-consumo" class="h-64"></div>
+                        </div>
+
+                        <div class="bg-white rounded-lg shadow-md p-6">
+                            <h4 class="text-gray-800 font-semibold mb-4">Movimientos Diarios</h4>
+                            <div id="chart-movimientos-diarios" class="h-64"></div>
+                        </div>
+
+                        <div class="bg-white rounded-lg shadow-md p-6">
+                            <h4 class="text-gray-800 font-semibold mb-4">Productos Bajo Stock</h4>
+                            <div id="chart-bajo-stock" class="h-64"></div>
+                        </div>
+                    </div>
+
+                    <!-- Tabla de Productos Críticos -->
+                    <div class="bg-white rounded-lg shadow-md p-6">
+                        <h4 class="text-gray-800 font-semibold mb-4">Productos Críticos (Bajo Stock)</h4>
+                        <div id="table-productos-criticos"></div>
+                    </div>
+                `;
+
+                document.getElementById('content-area').innerHTML = content;
+
+                // Inicializar gráficos
+                this.charts.push(
+                    ChartFactory.createBarChart('chart-rotacion', rotacion.map(r => r.producto), rotacion.map(r => ({ 
+                        label: r.producto, 
+                        data: r.movimientos, 
+                        backgroundColor: 'rgba(75, 192, 192, 0.6)', 
+                        borderColor: 'rgba(75, 192, 192, 1)', 
+                        borderWidth: 2 
+                    })))
+                );
+
+                this.charts.push(
+                    ChartFactory.createLineChart('chart-consumo', consumo.map(c => c.fecha), consumo.map(c => ({ 
+                        label: c.producto, 
+                        data: c.consumo, 
+                        borderColor: 'rgba(54, 162, 235, 1)', 
+                        backgroundColor: 'rgba(54, 162, 235, 0.2)', 
+                        fill: true 
+                    })))
+                );
+
+                this.charts.push(
+                    ChartFactory.createLineChart('chart-movimientos-diarios', movimientosDiarios.map(m => m.fecha), movimientosDiarios.map(m => ({ 
+                        label: m.tipo, 
+                        data: m.cantidad, 
+                        borderColor: m.tipo === 'entrada' ? 'green' : 'red', 
+                        backgroundColor: m.tipo === 'entrada' ? 'rgba(0, 255, 0, 0.2)' : 'rgba(255, 0, 0, 0.2)', 
+                        fill: true 
+                    })))
+                );
+
+                this.charts.push(
+                    ChartFactory.createDoughnutChart('chart-bajo-stock', 
+                        productosBajoStock.map(p => p.nombre), 
+                        productosBajoStock.map(p => p.cantidad)
+                    )
+                );
+
+                // Inicializar tabla
+                const tableProductosCriticos = new Table('table-productos-criticos', {
+                    columns: [
+                        { label: 'Producto', field: 'nombre', sortable: true },
+                        { label: 'SKU', field: 'sku', sortable: true },
+                        { label: 'Categoría', field: 'categoria', sortable: true },
+                        { label: 'Stock Actual', field: 'cantidad', sortable: true, format: (value) => `${value} unidades` },
+                        { label: 'Precio Unitario', field: 'precio_venta', sortable: true, format: (value) => Formatters.formatCurrency(value) },
+                        { label: 'Acciones', field: 'id', sortable: false }
+                    ],
+                    data: productosBajoStock,
+                    selectable: true,
+                    actions: [
+                        {
+                            id: 'reordenar',
+                            label: 'Reordenar',
+                            class: 'bg-blue-600 text-white',
+                            onClick: (row) => {
+                                // Lógica para reordenar producto
+                                console.log('Reordenar producto:', row);
+                            }
+                        }
+                    ]
+                });
+
+                tableProductosCriticos.create().appendTo('#table-productos-criticos');
+            }
+
+            setupEventListeners() {
+                // Aquí puedes agregar event listeners específicos para la página del dashboard
+            }
+        }
+
+        // Inicializar página Dashboard
+        const dashboardPage = new DashboardPage();
+        dashboardPage.init();
+    </script>
+</body>
+</html>
